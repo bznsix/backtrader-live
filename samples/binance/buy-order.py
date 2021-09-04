@@ -46,7 +46,7 @@ class TestStrategy(bt.Strategy):
 
 # absolute dir the script is in
 script_dir = os.path.dirname(__file__)
-abs_file_path = os.path.join(script_dir, '../params.json')
+abs_file_path = os.path.join(script_dir, 'params.json')
 with open(abs_file_path, 'r') as f:
     params = json.load(f)
 

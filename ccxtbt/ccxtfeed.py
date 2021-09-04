@@ -124,6 +124,7 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 #===========================================
                 return self._load_bar()
             elif self._state == self._ST_HISTORBACK:
+                print('更新history bar')
                 ret = self._load_bar()
                 if ret:
                     return ret
@@ -148,11 +149,13 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         #每次获取bar数目的最高限制
         limit = max(3, self.p.ohlcv_limit) #最少不能少于三个,原因:每次头bar时间重复要忽略,尾bar未完整要去掉,只保留中间的,所以最少三个
         #
+        print('load_bar-----')
         while True:
             #先获取数据长度
             dlen = self._data.qsize()
             #
             bars = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity, since=self._last_ts, limit=limit, params=self.p.fetch_ohlcv_params))
+            print(bars)
             # Check to see if dropping the latest candle will help with
             # exchanges which return partial data
             if self.p.drop_newest and len(bars) > 0:
@@ -180,10 +183,13 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         try:
             bar = self._data.get(block=False) #不阻塞
         except queue.Empty:
+            # print('队列是空的-无数据')
             return None  # no data in the queue
+        print('获得数据更新-')
         tstamp, open_, high, low, close, volume = bar
         dtime = datetime.utcfromtimestamp(tstamp // 1000)
         self.lines.datetime[0] = bt.date2num(dtime)
+        print(self.lines.datetime[0])
         self.lines.open[0] = open_
         self.lines.high[0] = high
         self.lines.low[0] = low

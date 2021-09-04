@@ -9,8 +9,13 @@ class TestStrategy(bt.Strategy):
 
         self.sma = bt.indicators.SMA(self.data,period=21)
 
-    def next(self):
+    def prenext_open(self):
+        print('This is Next open kline')
+        print(data.datetime.datetime())
 
+    def next(self):
+        print('进入新数据循环')
+        print(self.lines.datetime[0])
         # Get cash and balance
         # New broker method that will let you get the cash and balance for
         # any wallet. It also means we can disable the getcash() and getvalue()
@@ -41,7 +46,7 @@ class TestStrategy(bt.Strategy):
         else:
             self.live_data = False
 
-with open('./samples/params.json', 'r') as f:
+with open('params.json', 'r') as f:
     params = json.load(f)
 
 cerebro = bt.Cerebro(quicknotify=True)
