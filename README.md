@@ -15,4 +15,3 @@ cerbo中有个大循环，会无限的去调用datafeed中的_load函数，这�
 要向lines中更新数据，当self.lines中的数据得到了更新之后，将会回调我们的strategy函数中的next来执行
 我们的既定逻辑进行下单、撤单等操作,这也是为什么我们称之为数据驱动的原因。
 
-后续我会考虑将def load的数据来源修改成为websocket订阅，敬请期待~
