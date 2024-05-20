@@ -25,12 +25,13 @@ from __future__ import (absolute_import, division, print_function,
 #import time
 #from collections import deque
 from datetime import datetime
-
+import threading
 import backtrader as bt
 from backtrader.feed import DataBase
 from backtrader.utils.py3 import queue, with_metaclass
 
 from .ccxtstore import CCXTStore
+from .ccxtprofeed import TimeframeSubscribe
 
 
 class MetaCCXTFeed(DataBase.__class__):
@@ -66,7 +67,7 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
     """
 
     params = (
-        ('historical', False),      # only historical download
+        ('historical', False),  # only historical download
         ('backfill_start', False),  # do backfilling at the start
         ('fetch_ohlcv_params', {}),
         ('ohlcv_limit', 20),
@@ -84,9 +85,16 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         # self.store = CCXTStore(exchange, config, retries)
         self.store = self._store(**kwargs)
         self._data = queue.Queue()  # data queue for price data
-        self._last_id = ''          # last processed trade id for ohlcv
-        self._last_ts = self.utc_to_ts(datetime.utcnow()) # last processed timestamp for ohlcv
+        self._last_id = ''  # last processed trade id for ohlcv
+        self._last_ts = self.utc_to_ts(datetime.utcnow())  # last processed timestamp for ohlcv
         self._last_update_bar_time = 0
+        self.ccxtpro_queue = queue.Queue()
+        _granularity = self.store.get_granularity(self._timeframe, self._compression)
+        _symbol = self.p.dataname
+        print(self._timeframe,_symbol)
+        _run = TimeframeSubscribe(_symbol, _granularity, self.ccxtpro_queue)
+        producer_thread = threading.Thread(target=_run.start)
+        producer_thread.start()
 
     def utc_to_ts(self, dt):
         fromdate = datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
@@ -117,12 +125,10 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 #===========================================
                 # 其实这段代码最好放到独立的工作线程中做,这里纯粹偷懒
                 # 每隔一分钟就更新一次bar
-                nts = datetime.now().timestamp()
-                if nts - self._last_update_bar_time > 60:
-                    self._last_update_bar_time = nts
-                    self._update_bar(livemode=True)
+                _len = self.ccxtpro_queue.qsize()
+                if _len != 0:
+                    return self._load_bar(livemode=True)
                 #===========================================
-                return self._load_bar()
             elif self._state == self._ST_HISTORBACK:
                 print('更新history bar')
                 ret = self._load_bar()
@@ -147,14 +153,16 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
         if fromdate:
             self._last_ts = self.utc_to_ts(fromdate)
         #每次获取bar数目的最高限制
-        limit = max(3, self.p.ohlcv_limit) #最少不能少于三个,原因:每次头bar时间重复要忽略,尾bar未完整要去掉,只保留中间的,所以最少三个
+        limit = max(3, self.p.ohlcv_limit)  #最少不能少于三个,原因:每次头bar时间重复要忽略,尾bar未完整要去掉,只保留中间的,所以最少三个
         #
         print('load_bar-----')
         while True:
             #先获取数据长度
             dlen = self._data.qsize()
             #
-            bars = sorted(self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity, since=self._last_ts, limit=limit, params=self.p.fetch_ohlcv_params))
+            bars = sorted(
+                self.store.fetch_ohlcv(self.p.dataname, timeframe=granularity, since=self._last_ts, limit=limit,
+                                       params=self.p.fetch_ohlcv_params))
             print(bars)
             # Check to see if dropping the latest candle will help with
             # exchanges which return partial data
@@ -169,7 +177,7 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
                 tstamp = bar[0]
                 #通过时间戳判断bar是否为新的bar
                 if tstamp > self._last_ts:
-                    self._data.put(bar) #将新的bar保存到队列中
+                    self._data.put(bar)  #将新的bar保存到队列中
                     self._last_ts = tstamp
                     #print(datetime.utcfromtimestamp(tstamp//1000))
             #如果数据长度没有增长,那证明已经是当前最后一根bar,退出
@@ -179,23 +187,42 @@ class CCXTFeed(with_metaclass(MetaCCXTFeed, DataBase)):
             if livemode:
                 break
 
-    def _load_bar(self):
-        try:
-            bar = self._data.get(block=False) #不阻塞
-        except queue.Empty:
-            # print('队列是空的-无数据')
-            return None  # no data in the queue
-        print('获得数据更新-')
-        tstamp, open_, high, low, close, volume = bar
-        dtime = datetime.utcfromtimestamp(tstamp // 1000)
-        self.lines.datetime[0] = bt.date2num(dtime)
-        print(self.lines.datetime[0])
-        self.lines.open[0] = open_
-        self.lines.high[0] = high
-        self.lines.low[0] = low
-        self.lines.close[0] = close
-        self.lines.volume[0] = volume
-        return True
+    def _load_bar(self,livemode=False):
+        if livemode:
+            try:
+                bar = self.ccxtpro_queue.get(block=False)  #不阻塞
+            except queue.Empty:
+                # print('队列是空的-无数据')
+                return None  # no data in the queue
+            print('ccxtpro获得数据更新-')
+            print(bar[0])
+            tstamp, open_, high, low, close, volume = bar[0]
+            dtime = datetime.utcfromtimestamp(tstamp // 1000)
+            self.lines.datetime[0] = bt.date2num(dtime)
+            print(self.lines.datetime[0])
+            self.lines.open[0] = open_
+            self.lines.high[0] = high
+            self.lines.low[0] = low
+            self.lines.close[0] = close
+            self.lines.volume[0] = volume
+            return True
+        else:
+            try:
+                bar = self._data.get(block=False)  #不阻塞
+            except queue.Empty:
+                # print('队列是空的-无数据')
+                return None  # no data in the queue
+            print('获得数据更新-')
+            tstamp, open_, high, low, close, volume = bar
+            dtime = datetime.utcfromtimestamp(tstamp // 1000)
+            self.lines.datetime[0] = bt.date2num(dtime)
+            print(self.lines.datetime[0])
+            self.lines.open[0] = open_
+            self.lines.high[0] = high
+            self.lines.low[0] = low
+            self.lines.close[0] = close
+            self.lines.volume[0] = volume
+            return True
 
     def haslivedata(self):
         return self._state == self._ST_LIVE and not self._data.empty()
